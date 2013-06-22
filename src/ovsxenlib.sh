@@ -128,9 +128,6 @@ configure_interface_on_of_bridge() {
     # Make switchport corresponding to VM an access port
     #xm network-attach bridge=$BRIDGE ip=$IP_ADDRESS
 
-    # ovs-vsctl add-port (called in Xen scripts)
-    ovs-vsctl set port $VIF
-
     # Set up plumbing in infrastructure switch    
     ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
         in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=strip_vlan,output:$OF_BRIDGE_PORT
