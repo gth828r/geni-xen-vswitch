@@ -105,6 +105,7 @@ configure_interface_on_nonof_bridge() {
     local NON_OF_BRIDGE_PORT=$5
     
     # Make switchport corresponding to VM an access port
+    #xm network-attach bridge=$BRIDGE ip=$IP_ADDRESS
     # ovs-vsctl add-port (called in Xen scripts)
     ovs-vsctl set port $VIF tag=$VLAN
 
@@ -125,6 +126,8 @@ configure_interface_on_of_bridge() {
     local OF_BRIDGE_PORT=$5
     
     # Make switchport corresponding to VM an access port
+    #xm network-attach bridge=$BRIDGE ip=$IP_ADDRESS
+
     # ovs-vsctl add-port (called in Xen scripts)
     ovs-vsctl set port $VIF
 
@@ -133,15 +136,4 @@ configure_interface_on_of_bridge() {
         in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=strip_vlan,output:$OF_BRIDGE_PORT
     ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
         in_port=$OF_BRIDGE_PORT,action=mod_vlan_vid:$VLAN,output:$UPLINK_PORT
-}
-
-#DEPENDS ON: prepare_for_install
-install_floodlight() {
-    local FLOODLIGHT_INSTALL_PATH=$1
-
-    # Download and install floodlight (skip flowvisor for this)
-    apt-get install -y ant openjdk-6-jdk
-    wget http://floodlight-download.projectfloodlight.org/files/floodlight-source-0.90.tar.gz -O $FLOODLIGHT_INSTALL_PATH/floodlight-0.90.tar.gz
-    tar xvzf $FLOODLIGHT_INSTALL_PATH/floodlight-0.90.tar.gz
-    ant -f $FLOODLIGHT_INSTALL_PATH/floodlight-0.90/build.xml
 }

@@ -109,49 +109,6 @@ xm create /etc/xen/vlandvm2.cfg
 ## Add VMs to bridge on VLAN
 
 
-
-
-add_interface_to_nonof_bridge() {
-    local VIF=$1
-    local VLAN=$2
-
-    # INFRASTRUCTURE_BRIDGE and OF port numbers on it 
-    local INFRASTRUCTURE_BRIDGE=$3
-    local UPLINK_PORT=$4
-    local NON_OF_BRIDGE_PORT=$5
-    
-    # Make switchport corresponding to VM an access port
-    # ovs-vsctl add-port (called in Xen scripts)
-    ovs-vsctl set port $VIF tag=$VLAN
-
-    # Set up plumbing in infrastructure switch    
-    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
-        in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=output:$NON_OF_BRIDGE_PORT
-    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
-        in_port=$NON_OF_BRIDGE_PORT,dl_vlan=$VLAN,action=output:$UPLINK_PORT
-}
-
-add_interface_to_of_bridge() {
-    local VIF=$1
-    local VLAN=$2
-
-    # INFRASTRUCTURE_BRIDGE and OF port numbers on it 
-    local INFRASTRUCTURE_BRIDGE=$3
-    local UPLINK_PORT=$4
-    local OF_BRIDGE_PORT=$5
-    
-    # Make switchport corresponding to VM an access port
-    # ovs-vsctl add-port (called in Xen scripts)
-    ovs-vsctl set port $VIF
-
-    # Set up plumbing in infrastructure switch    
-    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
-        in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=strip_vlan,output:$OF_BRIDGE_PORT
-    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
-        in_port=$OF_BRIDGE_PORT,action=mod_vlan_vid:$VLAN,output:$UPLINK_PORT
-}
-
-
 #DEPENDS ON: prepare_for_install
 install_floodlight() {
     local FLOODLIGHT_INSTALL_PATH=$1
