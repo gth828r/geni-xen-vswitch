@@ -1,0 +1,182 @@
+#!/bin/bash
+
+# Import OVS functions for Xen
+. ovsxenlib.sh
+
+# Set variables
+FLOODLIGHT_INSTALL_PATH=/users/tupty
+INFRASTRUCTURE_BRIDGE=pseudowirebr
+NON_OF_BRIDGE=vlanbr
+
+# FIXME: determine the NIC we want instead of depending on user input
+read -p "Enter the data plane NIC: " UPLINK_DEV
+
+# Drop modified Xen scripts into place
+mv /etc/xen/scripts/xen-network-common.sh \
+   /etc/xen/scripts/xen-network-common.sh.orig
+mv ./xen-network-common.sh /etc/xen/scripts/xen-network-common.sh
+
+# Perform one-time installation
+prepare_for_install
+install_vswitch_software
+
+# Perform one-time infrastructure setup
+create_infrastructure_bridge $INFRASTRUCTURE_BRIDGE $UPLINK_DEV
+create_nonof_bridge $NON_OF_BRIDGE $INFRASTRUCTURE_BRIDGE
+
+# Perform one-time Xen setup 
+modprobe loop max_loop=255
+
+# Create OF sliver A
+OF_BRIDGE_A=ofabr
+CONTROLLER_A_IP=localhost
+CONTROLLER_A_PORT=6633
+SUBNET_A=192.168.1
+VLAN_A=1755
+## Create bridge
+create_of_bridge $OF_BRIDGE_A $INFRASTRUCTURE_BRIDGE \
+    $CONTROLLER_A_IP $CONTROLLER_A_PORT
+
+## Create VMs
+xen-create-image --dist=hardy --hostname=ofavm1 --memory=512mb \
+    --vcpus=1 --bridge=$OF_BRIDGE_A --ip $SUBNET_A.2 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_A.1 --dir="/users/tupty"
+xen-create-image --dist=hardy --hostname=ofavm2 --memory=512mb \
+    --vcpus=1 --bridge=$OF_BRIDGE_A --ip $SUBNET_A.3 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_A.1 --dir="/users/tupty"
+xm create /etc/xen/ofavm1.cfg
+xm create /etc/xen/ofavm2.cfg
+
+## Add VMs to bridge
+# Get the name of the VIF for VM 1
+#VM1_VIF=
+# Get the OF port number on the infrastructure bridge that faces this OF bridge
+#OF_BRIDGE_PORT=
+
+#configure_interface_on_of_bridge $VM1_VIF $VLAN_A $INFRASTRUCTURE_BRIDGE \
+#    $UPLINK_DEV $OF_BRIDGE_PORT
+
+
+# Create OF sliver B
+OF_BRIDGE_B=ofbbr
+CONTROLLER_B_IP=localhost
+CONTROLLER_B_PORT=6634
+SUBNET_B=192.168.2
+VLAN_B=1756
+## Create bridge
+create_of_bridge ofbbr $INFRASTRUCTURE_BRIDGE \
+    $CONTROLLER_B_IP $CONTROLLER_B_PORT
+
+## Create VMs
+xen-create-image --dist=hardy --hostname=ofbvm1 --memory=512mb \
+    --vcpus=1 --bridge=$OF_BRIDGE_B --ip $SUBNET_B.2 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_B.1 --dir="/users/tupty"
+xen-create-image --dist=hardy --hostname=ofbvm2 --memory=512mb \
+    --vcpus=1 --bridge=$OF_BRIDGE_B --ip $SUBNET_B.3 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_B.1 --dir="/users/tupty"
+xm create /etc/xen/ofbvm1.cfg
+xm create /etc/xen/ofbvm2.cfg
+
+## Add VMs to bridge
+
+# Create non-OF sliver C
+SUBNET_C=192.168.3
+## Create VMs
+xen-create-image --dist=hardy --hostname=vlancvm1 --memory=512mb --vcpus=1 \
+    --bridge=$NON_OF_BRIDGE --ip $SUBNET_C.2 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_C.1 --dir="/users/tupty"
+xen-create-image --dist=hardy --hostname=vlancvm2 --memory=512mb --vcpus=1 \
+    --bridge=$NON_OF_BRIDGE --ip $SUBNET_C.3 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_C.1 --dir="/users/tupty"
+xm create /etc/xen/vlancvm1.cfg
+xm create /etc/xen/vlancvm2.cfg
+
+## Add VMs to bridge on VLAN
+configure_interface_on_nonof_bridge
+
+# Create non-OF sliver D 
+SUBNET_D=192.168.4
+## Create VMs
+xen-create-image --dist=hardy --hostname=vlandvm1 --memory=512mb --vcpus=1 \
+    --bridge=$NON_OF_BRIDGE --ip $SUBNET_D.2 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_D.1 --dir="/users/tupty"
+xen-create-image --dist=hardy --hostname=vlandvm2 --memory=512mb --vcpus=1 \
+    --bridge=$NON_OF_BRIDGE --ip $SUBNET_D.3 --netmask=255.255.255.0 \
+    --gateway=$SUBNET_D.1 --dir="/users/tupty"
+xm create /etc/xen/vlandvm1.cfg
+xm create /etc/xen/vlandvm2.cfg
+
+## Add VMs to bridge on VLAN
+
+
+
+
+add_interface_to_nonof_bridge() {
+    local VIF=$1
+    local VLAN=$2
+
+    # INFRASTRUCTURE_BRIDGE and OF port numbers on it 
+    local INFRASTRUCTURE_BRIDGE=$3
+    local UPLINK_PORT=$4
+    local NON_OF_BRIDGE_PORT=$5
+    
+    # Make switchport corresponding to VM an access port
+    # ovs-vsctl add-port (called in Xen scripts)
+    ovs-vsctl set port $VIF tag=$VLAN
+
+    # Set up plumbing in infrastructure switch    
+    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
+        in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=output:$NON_OF_BRIDGE_PORT
+    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
+        in_port=$NON_OF_BRIDGE_PORT,dl_vlan=$VLAN,action=output:$UPLINK_PORT
+}
+
+add_interface_to_of_bridge() {
+    local VIF=$1
+    local VLAN=$2
+
+    # INFRASTRUCTURE_BRIDGE and OF port numbers on it 
+    local INFRASTRUCTURE_BRIDGE=$3
+    local UPLINK_PORT=$4
+    local OF_BRIDGE_PORT=$5
+    
+    # Make switchport corresponding to VM an access port
+    # ovs-vsctl add-port (called in Xen scripts)
+    ovs-vsctl set port $VIF
+
+    # Set up plumbing in infrastructure switch    
+    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
+        in_port=$UPLINK_PORT,dl_vlan=$VLAN,action=strip_vlan,output:$OF_BRIDGE_PORT
+    ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
+        in_port=$OF_BRIDGE_PORT,action=mod_vlan_vid:$VLAN,output:$UPLINK_PORT
+}
+
+
+#DEPENDS ON: prepare_for_install
+install_floodlight() {
+    local FLOODLIGHT_INSTALL_PATH=$1
+
+    # Download and install floodlight (skip flowvisor for this)
+    apt-get install -y ant openjdk-6-jdk
+    wget http://floodlight-download.projectfloodlight.org/files/floodlight-source-0.90.tar.gz -O $FLOODLIGHT_INSTALL_PATH/floodlight-0.90.tar.gz
+    tar xvzf $FLOODLIGHT_INSTALL_PATH/floodlight-0.90.tar.gz
+    ant -f $FLOODLIGHT_INSTALL_PATH/floodlight-0.90/build.xml
+}
+
+
+# With Xen 4.3, can just set vif.default.bridge="vif-openvswitch"
+# in /etc/xen/xl.conf, but this is Xen 4.1, so work around it 
+
+# Add ports to bridges using ovs-vsctl instead of brctl
+sed -i -e 's/brctl addif/ovs-vsctl add-port/g' /etc/xen/scripts/xen-network-common.sh
+
+# Remove VLAN interface, which sucks up the traffic
+#vconfig rem vlan$VLAN
+
+echo "Don't forget to start the floodlight instance"
+echo
+echo "To see VM passwords:"
+echo "find /var/log/xen-tools/ -print | xargs grep \"Password\" | sort"
+echo
+echo "To log into VMs:"
+echo "sudo xm console DOM_ID" 

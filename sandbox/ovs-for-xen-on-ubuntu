@@ -1,0 +1,120 @@
+# Install ovs and run it
+apt-get update
+apt-get install -y openvswitch-common openvswitch-switch openvswitch-datapath-source
+module-assistant auto-install openvswitch-datapath
+
+# Download and install floodlight (skip flowvisor for this)
+apt-get install -y ant openjdk-6-jdk
+wget http://floodlight-download.projectfloodlight.org/files/floodlight-source-0.90.tar.gz -O /users/tupty/floodlight-0.90.tar.gz
+tar xvzf /users/tupty/floodlight-0.90.tar.gz
+ant -f /users/tupty/floodlight-0.90/build.xml
+
+# Set up bridges
+ovs-vsctl add-br expofbr
+ovs-vsctl add-br vlanbr
+ovs-vsctl add-br pseudowirebr
+
+PWIRE_EXPOFBR_PORT=1
+PWIRE_VLANBR_PORT=2
+PWIRE_UPLINK_PORT=3
+
+#UPLINK_DEV=eth1
+#VLAN=279
+read -p "Enter the data plane NIC: " UPLINK_DEV
+read -p "Enter the non-OF VLAN: " VLAN
+
+# Floodlight will run on these ports by default,
+# skip FV for now even though we would want it
+# in real deployment
+FLOWVISOR_IP=127.0.0.1
+FLOWVISOR_PORT=6633
+
+# Set up patch ports for bridges
+## Patch Experimenter OF controlled bridge to pseudowire bridge
+ovs-vsctl add-port expofbr expofbr-ul
+ovs-vsctl add-port pseudowirebr expofbr-dl
+ovs-vsctl set Interface expofbr-ul type=patch options:peer=expofbr-dl
+ovs-vsctl set Interface expofbr-dl type=patch options:peer=expofbr-ul
+
+## Patch VLAN bridge to pseudowire bridge
+ovs-vsctl add-port vlanbr vlanbr-ul
+ovs-vsctl add-port pseudowirebr vlanbr-dl
+ovs-vsctl set Interface vlanbr-ul type=patch options:peer=vlanbr-dl
+ovs-vsctl set Interface vlanbr-dl type=patch options:peer=vlanbr-ul
+
+# Add data plane NIC to pseudowirebr
+#ovs-vsctl add-port pseudowirebr $UPLINK_DEV
+
+# Bring bridges up
+ip link set dev expofbr up
+ip link set dev vlanbr up
+ip link set dev pseudowirebr up
+
+# Clean up unwanted flows
+sudo ovs-ofctl del-flows pseudowirebr
+sudo ovs-ofctl del-flows expofbr
+# Leave NORMAL flow in place for vlanbr
+
+# Install pseudowire flows 
+
+#ovs-vsctl set-fail-mode pseudowirebr secure
+
+## Traffic in OF VLANs go to the OF switch
+ovs-ofctl add-flow pseudowirebr in_port=$PWIRE_UPLINK_PORT,dl_vlan=1750,action=output:$PWIRE_EXPOFBR_PORT
+ovs-ofctl add-flow pseudowirebr in_port=$PWIRE_EXPOFBR_PORT,dl_vlan=1750,action=output:$PWIRE_UPLINK_PORT
+
+## Traffic in normal VLANs go to the VLAN switch
+ovs-ofctl add-flow pseudowirebr in_port=$PWIRE_UPLINK_PORT,dl_vlan=$VLAN,action=output:$PWIRE_VLANBR_PORT
+ovs-ofctl add-flow pseudowirebr in_port=$PWIRE_VLANBR_PORT,dl_vlan=$VLAN,action=output:$PWIRE_UPLINK_PORT
+
+# Point expofbr at flowvisor
+ovs-vsctl set-controller expofbr tcp:$FLOWVISOR_IP:$FLOWVISOR_PORT
+ovs-vsctl set controller expofbr connection-mode=out-of-band
+ovs-vsctl set-fail-mode expofbr secure
+
+# Set up loop module with appropriate parameters
+modprobe loop max_loop=255
+
+# With Xen 4.3, can just set vif.default.bridge="vif-openvswitch"
+# in /etc/xen/xl.conf, but this is Xen 4.1, so work around it 
+
+# Add ports to bridges using ovs-vsctl instead of brctl
+sed -i -e 's/brctl addif/ovs-vsctl add-port/g' /etc/xen/scripts/xen-network-common.sh
+
+# Create OF images
+sudo xen-create-image --dist=hardy --hostname=ofvm1 --memory=512mb --vcpus=1 --bridge=expofbr --ip 192.168.1.2 --netmask=255.255.255.0 --gateway=192.168.1.1 --dir="/users/tupty"
+sudo xen-create-image --dist=hardy --hostname=ofvm2 --memory=512mb --vcpus=1 --bridge=expofbr --ip 192.168.1.3 --netmask=255.255.255.0 --gateway=192.168.1.1 --dir="/users/tupty"
+
+# Create non-OF images
+sudo xen-create-image --dist=hardy --hostname=vlanvm1 --memory=512mb --vcpus=1 --bridge=vlanbr --ip 192.168.2.2 --netmask=255.255.255.0 --gateway=192.168.2.1 --dir="/users/tupty"
+sudo xen-create-image --dist=hardy --hostname=vlanvm2 --memory=512mb --vcpus=1 --bridge=vlanbr --ip 192.168.2.3 --netmask=255.255.255.0 --gateway=192.168.2.1 --dir="/users/tupty"
+
+# Set up VMs on the OF VLAN
+xm create /etc/xen/ofvm1.cfg
+xm create /etc/xen/ofvm2.cfg
+
+# Set up VMs on the non-OF VLAN
+xm create /etc/xen/vlanvm1.cfg
+xm create /etc/xen/vlanvm2.cfg
+
+## This doesn't seem to add VLAN tag on the data plane
+## on entering the switch... it works right for things
+## that are controlled by ovs, but not by external
+## controllers...
+
+# Set VM ports as access ports
+ovs-vsctl set port vif1.0 tag=1750
+ovs-vsctl set port vif2.0 tag=1750
+ovs-vsctl set port vif3.0 tag=$VLAN
+ovs-vsctl set port vif4.0 tag=$VLAN
+
+# Remove VLAN interface, which sucks up the traffic
+vconfig rem vlan$VLAN
+
+echo "Don't forget to start the floodlight instance"
+echo
+echo "To see VM passwords:"
+echo "find /var/log/xen-tools/ -print | xargs grep \"Password\" | sort"
+echo
+echo "To log into VMs:"
+echo "sudo xm console DOM_ID" 
