@@ -104,9 +104,11 @@ configure_interface_on_nonof_bridge() {
     local UPLINK_PORT=$4
     local NON_OF_BRIDGE_PORT=$5
     
+    local NON_OF_BRIDGE=$6
+    local IP_ADDRESS=$7
+
     # Make switchport corresponding to VM an access port
-    #xm network-attach bridge=$BRIDGE ip=$IP_ADDRESS
-    # ovs-vsctl add-port (called in Xen scripts)
+    xm network-attach bridge=$NON_OF_BRIDGE ip=$IP_ADDRESS
     ovs-vsctl set port $VIF tag=$VLAN
 
     # Set up plumbing in infrastructure switch    
@@ -125,8 +127,11 @@ configure_interface_on_of_bridge() {
     local UPLINK_PORT=$4
     local OF_BRIDGE_PORT=$5
     
+    local OF_BRIDGE=$6
+    local IP_ADDRESS=$7
+
     # Make switchport corresponding to VM an access port
-    #xm network-attach bridge=$BRIDGE ip=$IP_ADDRESS
+    xm network-attach bridge=$OF_BRIDGE ip=$IP_ADDRESS
 
     # Set up plumbing in infrastructure switch    
     ovs-ofctl add-flow $INFRASTRUCTURE_BRIDGE \
